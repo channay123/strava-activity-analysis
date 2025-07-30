@@ -1,17 +1,14 @@
+import os
 import requests
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
-from datetime import datetime
 
-# Strava API credentials
-CLIENT_ID = 50635
-CLIENT_SECRET = "e5d66dcc2d6d76c08c2e946c13758c4060ab7113"
-ACCESS_TOKEN = "e5a1f6df283ce68318bb7fa8caf4cfc314560acb"
+# Note: This script reads the Strava API access token from the
+# STRAVA_ACCESS_TOKEN environment variable. Before running the script,
+# set this variable in your environment to a valid access token with
+# at least the `activity:read` scope.
 
-# Note: The provided access token has read scope and expires on 2025-07-31. After it expires,
-# you will need to refresh or generate a new token via the Strava API.
-# See https://developers.strava.com/docs/getting-started/ for more details.
 
 def get_activities(access_token: str, per_page: int = 200, page: int = 1):
     """Fetch a single page of activities from Strava."""
@@ -39,7 +36,6 @@ def get_all_activities(access_token: str):
 def activities_to_dataframe(activities: list) -> pd.DataFrame:
     """Convert Strava activities list to a pandas DataFrame."""
     df = pd.json_normalize(activities)
-    # Convert date strings to datetime objects
     df["start_date"] = pd.to_datetime(df["start_date"])
     df["start_date_local"] = pd.to_datetime(df["start_date_local"])
     return df
@@ -47,11 +43,8 @@ def activities_to_dataframe(activities: list) -> pd.DataFrame:
 
 def plot_distance_over_time(df: pd.DataFrame):
     """Plot total distance over time."""
-    # Convert distance from meters to kilometers
     df["distance_km"] = df["distance"] / 1000.0
-    # Extract date from local start time
     df["date"] = df["start_date_local"].dt.date
-    # Aggregate distance by date
     daily_distance = df.groupby("date")["distance_km"].sum()
     plt.figure(figsize=(10, 5))
     daily_distance.plot()
@@ -74,14 +67,52 @@ def plot_activity_type_distribution(df: pd.DataFrame):
     plt.show()
 
 
+def calculate_fastest_times(df: pd.DataFrame, distance_km: float) -> float:
+    """Estimate the fastest completion time (in seconds) for a given distance.
+
+    The estimation is based on the average pace of each activity (moving time / distance).
+    Only activities with at least the specified distance are considered.
+    """
+    subset = df[df["distance"] >= distance_km * 1000].copy()
+    if subset.empty:
+        return None
+    subset["pace_sec_per_km"] = subset["moving_time"] / (subset["distance"] / 1000)
+    subset["est_time_sec"] = subset["pace_sec_per_km"] * distance_km
+    return subset["est_time_sec"].min()
+
+
+def plot_fastest_times(df: pd.DataFrame):
+    """Plot estimated fastest 5K and 10K times from the activity data."""
+    fastest_5k_sec = calculate_fastest_times(df, 5)
+    fastest_10k_sec = calculate_fastest_times(df, 10)
+    labels = ["5 km", "10 km"]
+    secs_list = [fastest_5k_sec, fastest_10k_sec]
+    times_min = [(s / 60.0) if s is not None else 0 for s in secs_list]
+    plt.figure(figsize=(6, 4))
+    sns.barplot(x=labels, y=times_min)
+    plt.ylabel("Time (minutes)")
+    plt.title("Estimated Fastest 5K and 10K Times")
+    plt.tight_layout()
+    plt.show()
+    for label, secs in zip(labels, secs_list):
+        if secs is not None:
+            td = pd.to_timedelta(secs, unit='s')
+            print(f"Estimated fastest {label}: {td}")
+        else:
+            print(f"No activities long enough for {label}.")
+
+
 def main():
-    """Main function to fetch activities and generate visualizations."""
-    activities = get_all_activities(ACCESS_TOKEN)
+    """Main function to fetch activities and generate visualisations."""
+    access_token = os.getenv("STRAVA_ACCESS_TOKEN")
+    if not access_token:
+        raise ValueError("STRAVA_ACCESS_TOKEN environment variable not set.")
+    activities = get_all_activities(access_token)
     df = activities_to_dataframe(activities)
     print(f"Fetched {len(df)} activities from Strava.")
-    # Generate visualizations
     plot_distance_over_time(df)
     plot_activity_type_distribution(df)
+    plot_fastest_times(df)
 
 
 if __name__ == "__main__":
